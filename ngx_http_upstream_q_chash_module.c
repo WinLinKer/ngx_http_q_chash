@@ -6,10 +6,6 @@
 #define NR_VNODE                160
 #define HASH_DATA_LENGTH        32
 
-typedef struct {
-    ngx_array_t *values;
-    ngx_array_t *lengths;
-} ngx_http_upstream_q_chash_srv_conf_t;
 
 typedef struct {
     ngx_uint_t  peer_index;
@@ -23,6 +19,13 @@ typedef struct {
     ngx_uint_t                          nr_vnodes;
     ngx_uint_t                          nr_valid_peers;
 } ngx_http_upstream_q_chash_ring;
+
+typedef struct {
+    ngx_array_t                     *values;
+    ngx_array_t                     *lengths;
+    ngx_http_upstream_q_chash_ring  *q_chash_ring;
+} ngx_http_upstream_q_chash_srv_conf_t;
+
 
 typedef struct {
     /* rrp must be first */
@@ -282,15 +285,17 @@ static ngx_int_t ngx_http_upstream_init_q_chash_peer(ngx_http_request_t *r, ngx_
     ngx_http_upstream_q_chash_ring                  *q_chash_ring;
     ngx_str_t                                       evaluated_key_to_hash;
 
+    uchscf = ngx_http_conf_upstream_srv_conf(us, ngx_http_upstream_q_chash_module);
+    if (uchscf == NULL) {
+        return NGX_ERROR;
+    }
+
+    q_chash_ring = uchscf->q_chash_ring;
+
     qchp = ngx_pcalloc(r->pool, sizeof(*qchp));
     if(qchp == NULL)
         return NGX_ERROR;
     r->upstream->peer.data = &qchp->rrp;
-
-
-    // 对应init_q_chash中的替换
-    q_chash_ring = us->peer.data;
-    us->peer.data = q_chash_ring->peers;
 
     qchp->q_chash_ring = q_chash_ring;
     qchp->get_rr_peer = ngx_http_upstream_get_round_robin_peer;
@@ -298,20 +303,13 @@ static ngx_int_t ngx_http_upstream_init_q_chash_peer(ngx_http_request_t *r, ngx_
     qchp->rr_mode = 0;
 
     rc = ngx_http_upstream_init_round_robin_peer(r, us);
-
-    r->upstream->peer.get = ngx_http_upstream_get_q_chash_peer;
-
-    // 替换回
-    us->peer.data = q_chash_ring;
-
     if(rc != NGX_OK)
         return NGX_ERROR;
 
+    r->upstream->peer.get = ngx_http_upstream_get_q_chash_peer;
+
     // 计算该次访问hash值
     if(q_chash_ring->nr_valid_peers > 1) {
-        uchscf = ngx_http_conf_upstream_srv_conf(us, ngx_http_upstream_q_chash_module);
-        if (uchscf == NULL)
-            return NGX_ERROR;
         if (ngx_http_script_run(r, &evaluated_key_to_hash, uchscf->lengths->elts, 0, uchscf->values->elts) == NULL)
             return NGX_ERROR;
 
@@ -334,12 +332,18 @@ static int compare_vnodes_point(const q_chash_vnode_t *n1, const q_chash_vnode_t
 
 static ngx_int_t ngx_http_upstream_init_q_chash(ngx_conf_t *cf, ngx_http_upstream_srv_conf_t *us)
 {
-    unsigned char                   hash_data[HASH_DATA_LENGTH] = {};
-    ngx_http_upstream_q_chash_ring  *q_chash_ring;
-    ngx_http_upstream_rr_peers_t    *peers;
-    ngx_uint_t                      vnode_num, i, j, k, fill_next;
-    ngx_int_t                       si;
-    uint32_t                        point;
+    unsigned char                         hash_data[HASH_DATA_LENGTH] = {};
+    ngx_http_upstream_q_chash_ring        *q_chash_ring;
+    ngx_http_upstream_q_chash_srv_conf_t  *uchscf;
+    ngx_http_upstream_rr_peers_t          *peers;
+    ngx_uint_t                            vnode_num, i, j, k, fill_next;
+    ngx_int_t                             si;
+    uint32_t                              point;
+
+    uchscf = ngx_http_conf_upstream_srv_conf(us, ngx_http_upstream_q_chash_module);
+    if (uchscf == NULL) {
+        return NGX_ERROR;
+    }
 
     q_chash_ring = ngx_pcalloc(cf->pool, sizeof(*q_chash_ring));
     if(q_chash_ring == NULL)
@@ -351,9 +355,8 @@ static ngx_int_t ngx_http_upstream_init_q_chash(ngx_conf_t *cf, ngx_http_upstrea
 
     us->peer.init = ngx_http_upstream_init_q_chash_peer;
 
-    // 此处替换在init_q_chash_peer前要反向操作一次，确保rr_peer初始化正常
     q_chash_ring->peers = us->peer.data;
-    us->peer.data = q_chash_ring;
+    uchscf->q_chash_ring = q_chash_ring;
 
     peers = q_chash_ring->peers;
 
