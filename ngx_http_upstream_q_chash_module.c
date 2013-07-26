@@ -14,16 +14,15 @@ typedef struct {
 } q_chash_vnode_t;
 
 typedef struct {
-    ngx_http_upstream_rr_peers_t        *peers;
     q_chash_vnode_t                     *vnodes;
     ngx_uint_t                          nr_vnodes;
     ngx_uint_t                          nr_valid_peers;
 } ngx_http_upstream_q_chash_ring;
 
 typedef struct {
-    ngx_array_t                     *values;
-    ngx_array_t                     *lengths;
-    ngx_http_upstream_q_chash_ring  *q_chash_ring;
+    ngx_array_t                         *values;
+    ngx_array_t                         *lengths;
+    ngx_http_upstream_q_chash_ring      *q_chash_ring;
 } ngx_http_upstream_q_chash_srv_conf_t;
 
 
@@ -63,31 +62,31 @@ static ngx_command_t ngx_http_upstream_q_chash_commands[] = {
 };
 
 static ngx_http_module_t ngx_http_upstream_q_chash_module_ctx = {
-    NULL,                                       /* preconfiguration */
-    NULL,                                       /* postconfiguration */
+    NULL,                                           /* preconfiguration */
+    NULL,                                           /* postconfiguration */
 
-    NULL,                                       /* create main configuration */
-    NULL,                                       /* init main configuration */
+    NULL,                                           /* create main configuration */
+    NULL,                                           /* init main configuration */
 
-    ngx_http_upstream_q_chash_create_srv_conf,  /* create server configuration */
-    NULL,                                       /* merge server configuration */
+    ngx_http_upstream_q_chash_create_srv_conf,      /* create server configuration */
+    NULL,                                           /* merge server configuration */
 
-    NULL,                                       /* create location configuration */
-    NULL                                        /* merge location configuration */
+    NULL,                                           /* create location configuration */
+    NULL                                            /* merge location configuration */
 };
 
 ngx_module_t ngx_http_upstream_q_chash_module = {
     NGX_MODULE_V1,
-    &ngx_http_upstream_q_chash_module_ctx,         /* module context */
-    ngx_http_upstream_q_chash_commands,            /* module directives */
-    NGX_HTTP_MODULE,                               /* module type */
-    NULL,                                          /* init master */
-    NULL,                                          /* init module */
-    NULL,                                          /* init process */
-    NULL,                                          /* init thread */
-    NULL,                                          /* exit thread */
-    NULL,                                          /* exit process */
-    NULL,                                          /* exit master */
+    &ngx_http_upstream_q_chash_module_ctx,          /* module context */
+    ngx_http_upstream_q_chash_commands,             /* module directives */
+    NGX_HTTP_MODULE,                                /* module type */
+    NULL,                                           /* init master */
+    NULL,                                           /* init module */
+    NULL,                                           /* init process */
+    NULL,                                           /* init thread */
+    NULL,                                           /* exit thread */
+    NULL,                                           /* exit process */
+    NULL,                                           /* exit master */
     NGX_MODULE_V1_PADDING
 };
 
@@ -308,7 +307,7 @@ static ngx_int_t ngx_http_upstream_init_q_chash_peer(ngx_http_request_t *r, ngx_
 
     r->upstream->peer.get = ngx_http_upstream_get_q_chash_peer;
 
-    // 计算该次访问hash值
+    // calculate the vnode_index
     if(q_chash_ring->nr_valid_peers > 1) {
         if (ngx_http_script_run(r, &evaluated_key_to_hash, uchscf->lengths->elts, 0, uchscf->values->elts) == NULL)
             return NGX_ERROR;
@@ -355,24 +354,24 @@ static ngx_int_t ngx_http_upstream_init_q_chash(ngx_conf_t *cf, ngx_http_upstrea
 
     us->peer.init = ngx_http_upstream_init_q_chash_peer;
 
-    q_chash_ring->peers = us->peer.data;
     uchscf->q_chash_ring = q_chash_ring;
 
-    peers = q_chash_ring->peers;
+    peers = us->peer.data;
 
     for(i = 0; i < peers->number; i++) {
         if(!peers->peer[i].down)
             q_chash_ring->nr_valid_peers ++;
     }
 
-    ngx_log_debug(NGX_LOG_DEBUG_HTTP, cf->log, 0, "upstream %V nr_valid_peers %ui", peers->name, q_chash_ring->nr_valid_peers);
+    // old_cycle's log_level is NGX_LOG_NOTICE
+    //ngx_log_debug(NGX_LOG_DEBUG_HTTP, cf->log, 0, "upstream %V nr_valid_peers %ui", peers->name, q_chash_ring->nr_valid_peers);
 
     // no need to hash
     if(q_chash_ring->nr_valid_peers <= 1) {
         return NGX_OK;
     }
 
-    // 建立虚拟节点
+    // create vnodes, peer_index field, sort
     q_chash_ring->vnodes = ngx_palloc(cf->pool, sizeof(q_chash_vnode_t) * peers->total_weight * NR_VNODE);
     if(q_chash_ring->vnodes == NULL) {
         return NGX_ERROR;
@@ -399,11 +398,12 @@ static ngx_int_t ngx_http_upstream_init_q_chash(ngx_conf_t *cf, ngx_http_upstrea
         }
     }
 
-    ngx_log_debug(NGX_LOG_DEBUG_HTTP, cf->log, 0, "upstream %V nr_vnodes %ui", peers->name, q_chash_ring->nr_vnodes);
+    // old_cycle's log_level is NGX_LOG_NOTICE
+    //ngx_log_debug(NGX_LOG_DEBUG_HTTP, cf->log, 0, "upstream %V nr_vnodes %ui", peers->name, q_chash_ring->nr_vnodes);
 
     ngx_qsort(q_chash_ring->vnodes, q_chash_ring->nr_vnodes, sizeof(q_chash_vnode_t), (const void *)compare_vnodes_point);
 
-    // 建立next链，加速retry过程
+    // fill vnode's next field
     for(i = 1; ; i ++) {
         if(q_chash_ring->vnodes[0].peer_index == q_chash_ring->vnodes[i].peer_index)
             continue;
@@ -423,11 +423,14 @@ static ngx_int_t ngx_http_upstream_init_q_chash(ngx_conf_t *cf, ngx_http_upstrea
         }
     }
 
+    // old_cycle's log_level is NGX_LOG_NOTICE
+    /*
     for(i = 0; i < q_chash_ring->nr_vnodes; i++) {
         ngx_log_debug(NGX_LOG_DEBUG_HTTP, cf->log, 0, "%ui, next %ui peer_index %ui point %uD", i, q_chash_ring->vnodes[i].next, q_chash_ring->vnodes[i].peer_index, q_chash_ring->vnodes[i].point);
     }
+    */
 
-    // 统计各节点比重
+    // calculate peer ratio for debug ~
     ngx_uint_t *statistic_array = ngx_pcalloc(cf->pool, sizeof(uint32_t) * peers->number);
     if(statistic_array == NULL)
         return NGX_OK;
@@ -440,7 +443,7 @@ static ngx_int_t ngx_http_upstream_init_q_chash(ngx_conf_t *cf, ngx_http_upstrea
     for(i = 0; i < peers->number; i++) {
         if(peers->peer[i].down)
             continue;
-        ngx_log_debug(NGX_LOG_DEBUG_HTTP, cf->log, 0, "upstream %V %V weight %ui actually ratio %.2f%%", peers->name, &peers->peer[i].name, peers->peer[i].weight, 100 * (double)statistic_array[i] / 0xFFFFFFFF);
+        ngx_log_error(NGX_LOG_NOTICE, cf->log, 0, "upstream %V %V weight %ui actually ratio %.2f%%", peers->name, &peers->peer[i].name, peers->peer[i].weight, 100 * (double)statistic_array[i] / 0xFFFFFFFF);
     }
     ngx_pfree(cf->pool, statistic_array);
 
