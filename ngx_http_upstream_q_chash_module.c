@@ -154,7 +154,11 @@ static ngx_http_upstream_rr_peer_t *q_chash_get_peer(ngx_http_upstream_q_chash_p
     if(q_chash_ring->nr_valid_peers == 1 && qchp->tries < 1) {
         for(i = 0; i < peers->number; i++) {
             peer = &peers->peer[i];
-            if(!peer->down) break;
+            if(!peer->down) {
+                n = i / (8 * sizeof(uintptr_t));
+                m = (uintptr_t) 1 << i % (8 * sizeof(uintptr_t));
+                break;
+            }
         }
     }
     else if(q_chash_ring->nr_valid_peers > 1) {
@@ -188,12 +192,7 @@ static ngx_http_upstream_rr_peer_t *q_chash_get_peer(ngx_http_upstream_q_chash_p
     if(peer == NULL)
         return NULL;
 
-    i = peer - &rrp->peers->peer[0];
-
     rrp->current = i;
-
-    n = i / (8 * sizeof(uintptr_t));
-    m = (uintptr_t) 1 << i % (8 * sizeof(uintptr_t));
 
     rrp->tried[n] |= m;
 
