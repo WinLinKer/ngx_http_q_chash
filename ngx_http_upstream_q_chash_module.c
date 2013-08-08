@@ -34,6 +34,7 @@ typedef struct {
     uint32_t                            point;
     ngx_uint_t                          vnode_index;
     ngx_uint_t                          tries;
+    ngx_uint_t                          ignore;
     ngx_event_get_peer_pt               get_rr_peer;
     unsigned                            rr_mode:1;
 } ngx_http_upstream_q_chash_peer_data_t;
@@ -144,7 +145,7 @@ static ngx_http_upstream_rr_peer_t *q_chash_get_peer(ngx_http_upstream_q_chash_p
     ngx_http_upstream_rr_peer_data_t    *rrp = &(qchp->rrp);
     ngx_http_upstream_rr_peers_t        *peers = rrp->peers;
     ngx_http_upstream_rr_peer_t         *peer = NULL;
-    ngx_uint_t                          i, n, checked;
+    ngx_uint_t                          i, n;
     uintptr_t                           m;
     time_t                              now;
 
@@ -157,7 +158,7 @@ static ngx_http_upstream_rr_peer_t *q_chash_get_peer(ngx_http_upstream_q_chash_p
         }
     }
     else if(q_chash_ring->nr_valid_peers > 1) {
-        for(checked = 0; qchp->tries + checked < q_chash_ring-> nr_valid_peers; qchp->vnode_index = q_chash_ring->vnodes[qchp->vnode_index].next) {
+        for(; qchp->tries + qchp->ignore < q_chash_ring-> nr_valid_peers; qchp->vnode_index = q_chash_ring->vnodes[qchp->vnode_index].next) {
 
             ngx_log_debug(NGX_LOG_DEBUG_HTTP, log, 0, "q_chash check vnode_index %ui", qchp->vnode_index);
 
@@ -174,7 +175,7 @@ static ngx_http_upstream_rr_peer_t *q_chash_get_peer(ngx_http_upstream_q_chash_p
                     && peers->peer[i].fails >= peers->peer[i].max_fails
                     && now - peers->peer[i].checked <= peers->peer[i].fail_timeout) {
                 rrp->tried[n] |= m;
-                checked ++;
+                qchp->ignore ++;
                 continue;
             }
 
@@ -213,7 +214,7 @@ static ngx_int_t ngx_http_upstream_get_q_chash_peer(ngx_peer_connection_t *pc, v
     ngx_uint_t                              i, n;
     ngx_int_t                               rc;
 
-    ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "q_chash try %ui, valid %ui, pc->tries %ui", qchp->tries, q_chash_ring->nr_valid_peers, pc->tries);
+    ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "q_chash try %ui ignore %ui, valid %ui, pc->tries %ui", qchp->tries, qchp->ignore, q_chash_ring->nr_valid_peers, pc->tries);
 
     if(!qchp->rr_mode) {
         peer = q_chash_get_peer(qchp, pc->log);
@@ -299,6 +300,7 @@ static ngx_int_t ngx_http_upstream_init_q_chash_peer(ngx_http_request_t *r, ngx_
     qchp->q_chash_ring = q_chash_ring;
     qchp->get_rr_peer = ngx_http_upstream_get_round_robin_peer;
     qchp->tries = 0;
+    qchp->ignore = 0;
     qchp->rr_mode = 0;
 
     rc = ngx_http_upstream_init_round_robin_peer(r, us);
